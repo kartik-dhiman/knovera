@@ -24,6 +24,8 @@ class Retriever:
         self.embedder = embedder
 
     def retrieve(self, query: str, top_k: Optional[int] = None, doc_ids: Optional[List[str]] = None) -> List[RetrievedChunk]:
+        from app.core.utils import normalize_text
+        query = normalize_text(query)
         query_vec = self.embedder.embed_query(query)
         where: Optional[Dict[str, Any]] = None
         if doc_ids:

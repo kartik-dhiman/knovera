@@ -1070,35 +1070,80 @@ body::after {
 }
 
 .message.assistant .msg-content .kb-exact {
-  margin-top: 10px;
-  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  margin-top: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--panel-soft) 82%, transparent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel-soft));
   overflow: hidden;
 }
 
 .message.assistant .msg-content .kb-exact summary {
   cursor: pointer;
-  padding: 8px 10px;
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: color-mix(in srgb, var(--muted) 92%, var(--text));
-  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  user-select: none;
+}
+
+.message.assistant .msg-content .kb-exact summary::-webkit-details-marker {
+  display: none;
+}
+
+.message.assistant .msg-content .kb-exact-icon {
+  font-size: 0.95rem;
+  line-height: 1;
 }
 
 .message.assistant .msg-content .kb-exact-body {
-  padding: 8px 10px 10px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+}
+
+.message.assistant .msg-content .kb-source-tag {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  margin-bottom: 4px;
+  letter-spacing: 0.01em;
 }
 
 .message.assistant .msg-content .kb-exact-line {
-  font-size: 0.9em;
-  line-height: 1.45;
-  margin-bottom: 6px;
+  font-size: 0.88em;
+  line-height: 1.55;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  font-style: italic;
+  color: var(--text);
 }
 
 .message.assistant .msg-content .kb-exact-line:last-child {
   margin-bottom: 0;
 }
+
+/* Lists inside assistant messages */
+.msg-content .msg-list {
+  margin: 4px 0 8px;
+  padding-left: 1.4em;
+  line-height: 1.65;
+}
+
+.msg-content .msg-list li {
+  margin-bottom: 4px;
+}
+
+.msg-content .msg-list li:last-child {
+  margin-bottom: 0;
+}
+
 
 .msg-content code {
   border-radius: 6px;
@@ -1388,6 +1433,18 @@ body::after {
 .kb-card.active {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
   background: color-mix(in srgb, var(--accent) 10%, var(--panel-soft));
+}
+
+.delete-doc-btn {
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.delete-doc-btn:hover {
+  opacity: 1;
 }
 
 .typing-dots {

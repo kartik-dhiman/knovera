@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import List
 from uuid import uuid4
@@ -10,6 +11,8 @@ from app.core.config import settings
 from app.core.container import container
 from app.schemas.ingest import IngestResponse, IngestResponseItem
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 
@@ -17,7 +20,9 @@ def _run_ingest(doc_id: str, file_path: str, file_name: str) -> None:
     try:
         container.ingestion.ingest_pdf(doc_id=doc_id, pdf_path=file_path, doc_name=file_name)
     except Exception as exc:  # noqa: BLE001
-        container.sqlite.update_document_status(doc_id, status="failed", error=str(exc))
+        error_msg = f"{type(exc).__name__}: {exc}"
+        logger.error("Failed to ingest %s (doc_id=%s): %s", file_name, doc_id, error_msg, exc_info=True)
+        container.sqlite.update_document_status(doc_id, status="failed", error=error_msg)
 
 
 @router.post("", response_model=IngestResponse)

@@ -1,6 +1,126 @@
 let currentChatId = null;
 let currentView = 'chats';
 let kbCache = [];
+
+/* websocket used for socket-based chat queries */
+let chatWs = null;
+let chatWsReady = false;
+
+function openChatSocket(chatId) {
+  if (chatWs) {
+    chatWs.close();
+    chatWs = null;
+    chatWsReady = false;
+  }
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  chatWs = new WebSocket(`${scheme}://${location.host}/api/chats/ws/${chatId}`);
+
+  chatWs.addEventListener('open', () => {
+    console.log('WebSocket opened for chat', chatId);
+    chatWsReady = true;
+  });
+
+  chatWs.addEventListener('message', (ev) => {
+    let data;
+    try {
+      data = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    handleWsMessage(data);
+  });
+
+  chatWs.addEventListener('close', () => {
+    console.log('WebSocket closed');
+    chatWs = null;
+    chatWsReady = false;
+  });
+
+  chatWs.addEventListener('error', (ev) => {
+    console.error('WebSocket error', ev);
+  });
+}
+
+function handleWsMessage(data) {
+  // ── "info" status messages (retrieving / generating) ──────────────────────
+  if (data.type === "info") {
+    const typingRow = document.getElementById('typingRow');
+    if (typingRow) {
+      const dots = typingRow.querySelector('.typing-dots');
+      if (dots) dots.title = data.message || '';
+    }
+    return;
+  }
+
+  // ── Streaming token ────────────────────────────────────────────────────────
+  if (data.type === "token") {
+    const box = document.getElementById('chatMessages');  // FIX: was 'messages'
+    if (!box) return;
+
+    let streamEl = box.querySelector('.message-text[data-is-streaming="true"]');
+
+    if (!streamEl) {
+      // First token: replace the typing-dots placeholder with a real bubble
+      const typingRow = document.getElementById('typingRow');
+      if (typingRow) typingRow.remove();
+
+      const msgRow = document.createElement('div');
+      msgRow.className = 'message-row assistant';
+      msgRow.id = 'streamingRow';
+      msgRow.innerHTML = `
+        <div class="message assistant">
+          <div class="msg-role">${escapeHtml(currentAssistantName)}</div>
+          <div class="msg-content"><div class="message-text" data-is-streaming="true"></div></div>
+        </div>`;
+      box.appendChild(msgRow);
+      streamEl = msgRow.querySelector('.message-text[data-is-streaming="true"]');
+    }
+
+    // Accumulate raw text; render as plain text while streaming for performance
+    streamEl.dataset.rawText = (streamEl.dataset.rawText || '') + data.content;
+    streamEl.textContent = streamEl.dataset.rawText;
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
+
+  // ── Complete ───────────────────────────────────────────────────────────────
+  if (data.type === "complete") {
+    const box = document.getElementById('chatMessages');  // FIX: was 'messages'
+
+    // Finalize the streaming bubble IN-PLACE: apply full markdown/citation render
+    const streamEl = box && box.querySelector('.message-text[data-is-streaming="true"]');
+    if (streamEl) {
+      const raw = streamEl.dataset.rawText || streamEl.textContent || '';
+      // Replace the plain-text div with the fully-formatted msg-content
+      const parent = streamEl.closest('.message');
+      if (parent) {
+        const content = parent.querySelector('.msg-content');
+        if (content) content.innerHTML = formatMessageContent(raw);
+      }
+      streamEl.removeAttribute('data-is-streaming');
+      delete streamEl.dataset.rawText;
+    }
+
+    // Remove any leftover typing row
+    const typingRow = document.getElementById('typingRow');
+    if (typingRow) typingRow.remove();
+
+    // Render citations sidebar
+    if (data.citations) renderCitations(data.citations);
+
+    // Refresh chat list (title auto-update etc) — but do NOT re-render messages
+    if (data.chat_id) refreshChats();
+    return;
+  }
+
+  // ── Legacy fallback (non-streaming HTTP response) ─────────────────────────
+  const typingRow = document.getElementById('typingRow');
+  if (typingRow) typingRow.remove();
+  if (data.messages) renderChatWithTyping(data.messages);
+  if (data.citations) renderCitations(data.citations);
+  if (data.chat_id) refreshChats();
+}
+
 let activeTheme = 'light';
 let currentUserName = 'User';
 let currentAssistantName = 'Assistant';
@@ -190,40 +310,127 @@ function escapeHtml(text) {
 }
 
 function formatMessageContent(raw) {
-  const escaped = escapeHtml(raw || '');
-  const withCode = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
-  const withBold = withCode.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  const withSourceLine = withBold.replace(/(^|\n)(\[(?:Source|source):[^\]\n]+\])/g, '$1<span class="msg-source">$2</span>');
+  if (!raw) return '<p></p>';
+
+  // ── 1. Extract KB_EXACT blocks before any escaping ──────────────────────
   const exactBlocks = [];
-  const withPlaceholders = withSourceLine.replace(/\[\[KB_EXACT\]\]([\s\S]*?)\[\[\/KB_EXACT\]\]/gi, (_, block) => {
+  let text = raw.replace(/\[\[KB_EXACT\]\]([\s\S]*?)\[\[\/KB_EXACT\]\]/gi, (_, block) => {
     const lines = String(block || '')
       .split('\n')
-      .map((line) => line.trim())
+      .map(l => l.trim())
       .filter(Boolean);
 
-    if (!lines.length) {
-      return '';
-    }
+    if (!lines.length) return '';
 
-    const body = lines.map((line) => `<div class="kb-exact-line">${line}</div>`).join('');
-    const detailsHtml = `<details class="kb-exact"><summary>Exact wording from knowledge base</summary><div class="kb-exact-body">${body}</div></details>`;
-    const token = `__KB_EXACT_${exactBlocks.length}__`;
-    exactBlocks.push({ token, detailsHtml });
+    // Group lines as source-header vs excerpt
+    const bodyHtml = lines.map(line => {
+      if (/^\[(?:Source|source|स्रोत):/i.test(line)) {
+        return `<div class="kb-source-tag">${escapeHtml(line)}</div>`;
+      }
+      return `<div class="kb-exact-line">"${escapeHtml(line)}"</div>`;
+    }).join('');
+
+    const html = `
+      <details class="kb-exact">
+        <summary>
+          <span class="kb-exact-icon">📄</span>
+          Source excerpt from document
+        </summary>
+        <div class="kb-exact-body">${bodyHtml}</div>
+      </details>`;
+    const token = `__KBEXACT${exactBlocks.length}__`;
+    exactBlocks.push({ token, html });
     return `\n\n${token}\n\n`;
   });
 
-  let paragraphs = withPlaceholders
-    .split(/\n{2,}/)
-    .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`)
-    .join('');
+  // Strip any orphaned / unmatched [[KB_EXACT]] or [[/KB_EXACT]] tags
+  // (small models sometimes emit a closing tag without the opening, or vice versa)
+  text = text
+    .replace(/\[\[KB_EXACT\]\]/gi, '')
+    .replace(/\[\[\/KB_EXACT\]\]/gi, '');
 
+  // ── 2. Escape HTML in non-block text ────────────────────────────────────
+  // Split on the tokens so we don't escape them
+  const parts = text.split(/(__KBEXACT\d+__)/);
+  const processedParts = parts.map(part => {
+    if (/^__KBEXACT\d+__$/.test(part)) return part; // leave token untouched
+    return escapeHtml(part);
+  });
+  text = processedParts.join('');
+
+  // ── 3. Inline markdown ───────────────────────────────────────────────────
+  text = text
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+
+  // ── 4. Source tag lines  e.g. [Source: doc | page 2] ────────────────────
+  text = text.replace(
+    /(^|\n)(\[(?:Source|source|स्रोत):[^\]\n]+\])/g,
+    '$1<span class="msg-source">$2</span>'
+  );
+
+  // ── 5. Convert to structured HTML blocks ────────────────────────────────
+  const blocks = text.split(/\n{2,}/);
+  const htmlBlocks = blocks.map(block => {
+    const trimmed = block.trim();
+    if (!trimmed) return '';
+
+    // KB_EXACT placeholder — returned as-is to be replaced later
+    if (/^__KBEXACT\d+__$/.test(trimmed)) return trimmed;
+
+    // Numbered list  (lines starting with "1. " "2. " etc)
+    const numberedLines = trimmed.split('\n').filter(l => /^\d+\.\s/.test(l.trim()));
+    if (numberedLines.length >= 2 || (numberedLines.length === 1 && trimmed.split('\n').length === 1)) {
+      const items = trimmed.split('\n')
+        .filter(l => /^\d+\.\s/.test(l.trim()))
+        .map(l => `<li>${l.replace(/^\d+\.\s+/, '')}</li>`)
+        .join('');
+      if (items) return `<ol class="msg-list">${items}</ol>`;
+    }
+
+    // Bullet list  (lines starting with "- " or "• " or "* ")
+    const bulletLines = trimmed.split('\n').filter(l => /^[-•*]\s/.test(l.trim()));
+    if (bulletLines.length >= 1 && bulletLines.length === trimmed.split('\n').filter(l => l.trim()).length) {
+      const items = trimmed.split('\n')
+        .filter(l => l.trim())
+        .map(l => `<li>${l.replace(/^[-•*]\s+/, '')}</li>`)
+        .join('');
+      return `<ul class="msg-list">${items}</ul>`;
+    }
+
+    // Mixed block with some bullet lines
+    const lines = trimmed.split('\n');
+    const hasBullets = lines.some(l => /^[-•*]\s/.test(l.trim()) || /^\d+\.\s/.test(l.trim()));
+    if (hasBullets) {
+      const listItems = lines
+        .filter(l => l.trim())
+        .map(l => {
+          if (/^[-•*]\s/.test(l.trim())) return `<li>${l.replace(/^[-•*]\s+/, '')}</li>`;
+          if (/^\d+\.\s/.test(l.trim())) return `<li>${l.replace(/^\d+\.\s+/, '')}</li>`;
+          return `<p>${l}</p>`;
+        })
+        .join('');
+      return `<ul class="msg-list">${listItems}</ul>`;
+    }
+
+    // Plain paragraph — join internal newlines as <br>
+    return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
+  });
+
+  let html = htmlBlocks.join('');
+
+  // ── 6. Reinject KB_EXACT blocks ─────────────────────────────────────────
   for (const block of exactBlocks) {
-    paragraphs = paragraphs
-      .replace(`<p>${block.token}</p>`, block.detailsHtml)
-      .replace(block.token, block.detailsHtml);
+    html = html
+      .replace(`<p>${block.token}</p>`, block.html)
+      .replace(`<ol class="msg-list"><li>${block.token}</li></ol>`, block.html)
+      .replace(block.token, block.html);
   }
-  return paragraphs || '<p></p>';
+
+  return html || '<p></p>';
 }
+
 
 function makeMessageNode(msg) {
   const row = document.createElement('div');
@@ -351,14 +558,49 @@ async function refreshDocs(preselectedIds = null) {
     const checked = selectedNow.has(doc.id) ? 'checked' : '';
     const row = document.createElement('label');
     row.className = 'doc-row d-flex justify-content-between align-items-center gap-2';
+
+    let deleteBtn = '';
+    if (doc.status === 'ready') {
+      deleteBtn = `<button type="button" class="btn btn-sm btn-outline-danger delete-doc-btn" data-doc-id="${doc.id}" title="Delete document">×</button>`;
+    }
+
     row.innerHTML = `
       <span class="small text-truncate">
         <input class="form-check-input me-2" type="checkbox" name="docSelect" value="${doc.id}" ${disabled} ${checked} />
         ${doc.name}
       </span>
-      <span class="badge ${doc.status === 'ready' ? 'text-bg-success' : 'text-bg-secondary'}">${doc.status}</span>
+      <div class="d-flex align-items-center gap-2">
+        <span class="badge ${doc.status === 'ready' ? 'text-bg-success' : 'text-bg-secondary'}">${doc.status}</span>
+        ${deleteBtn}
+      </div>
     `;
     wrap.appendChild(row);
+  }
+
+  // Attach delete handlers
+  for (const btn of wrap.querySelectorAll('.delete-doc-btn')) {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const docId = btn.dataset.docId;
+      const docName = btn.parentElement.parentElement.querySelector('.text-truncate').textContent.trim();
+
+      if (!confirm(`Delete "${docName}"? This cannot be undone.`)) {
+        return;
+      }
+
+      const deleteRes = await fetch(`/api/documents/${docId}`, {
+        method: 'DELETE',
+      });
+
+      if (!deleteRes.ok) {
+        alert('Failed to delete document.');
+        return;
+      }
+
+      await refreshDocs();
+    });
   }
 }
 
@@ -465,6 +707,7 @@ async function refreshKnowledgeBases() {
       </div>
       <div class="d-flex gap-2 mt-2">
         <button class="btn btn-sm btn-outline-primary" data-action="use" data-kb-id="${kb.id}">Use in Chat</button>
+        <button class="btn btn-sm btn-outline-danger" data-action="delete" data-kb-id="${kb.id}">Delete</button>
       </div>
     `;
     list.appendChild(div);
@@ -492,6 +735,38 @@ async function refreshKnowledgeBases() {
       const mainSelect = document.getElementById('chatKbSelect');
       if (mainSelect) mainSelect.value = btn.dataset.kbId || '';
       setView('chats');
+    });
+  }
+
+  for (const btn of list.querySelectorAll('button[data-action="delete"]')) {
+    btn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const kbId = btn.dataset.kbId;
+      if (!kbId) return;
+
+      const kb = kbCache.find((x) => x.id === kbId);
+      const kbName = kb ? kb.name : 'Unknown KB';
+
+      if (!confirm(`Are you sure you want to delete "${kbName}"? This cannot be undone.`)) {
+        return;
+      }
+
+      const res = await fetch(`/api/knowledge-bases/${kbId}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        alert('Failed to delete knowledge base.');
+        return;
+      }
+
+      // Reset editor if deleting the currently edited KB
+      if (editingKbId === kbId) {
+        editingKbId = null;
+        await setKbEditorMode('create');
+      }
+
+      await refreshKnowledgeBases();
     });
   }
 }
@@ -547,6 +822,9 @@ async function loadChat(chatId) {
 
   const chat = await res.json();
   currentChatId = chat.id;
+  // open (or reconnect) websocket for this chat
+  openChatSocket(chat.id);
+
   currentUserName = chat.user_name || 'User';
   currentAssistantName = chat.assistant_name || 'Assistant';
   currentCitationMode = Boolean(chat.citation_mode);
@@ -775,30 +1053,67 @@ async function askQuestion() {
   addTypingPlaceholder();
   box.scrollTop = box.scrollHeight;
 
-  const res = await fetch(`/api/chats/${currentChatId}/ask`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, citation_mode, top_k }),
-  });
-
-  if (!res.ok) {
-    const typingRow = document.getElementById('typingRow');
-    if (typingRow) typingRow.remove();
-    let detail = 'Failed to query chat.';
-    try {
-      const err = await res.json();
-      if (err.detail) detail = err.detail;
-    } catch (_) {}
-    alert(detail);
+  // Try to use WebSocket for streaming response
+  // If socket is ready, send immediately
+  if (chatWsReady && chatWs && chatWs.readyState === WebSocket.OPEN) {
+    console.log('Sending question over WebSocket');
+    chatWs.send(JSON.stringify({ question, citation_mode, top_k }));
+    // UI will be updated when message arrives via socket listener
     syncSendButtons();
+    return;
+  } else {
+    console.log('WebSocket not ready, will fallback or wait', { chatWsReady, readyState: chatWs ? chatWs.readyState : null });
+  }
+
+  // If socket exists but not ready yet, wait up to 2 seconds for it to open
+  if (chatWs && chatWs.readyState === WebSocket.CONNECTING) {
+    let retries = 0;
+    const waitForSocket = setInterval(() => {
+      retries++;
+      if (chatWsReady && chatWs.readyState === WebSocket.OPEN) {
+        clearInterval(waitForSocket);
+        chatWs.send(JSON.stringify({ question, citation_mode, top_k }));
+        syncSendButtons();
+        return;
+      }
+      if (retries > 20) {
+        clearInterval(waitForSocket);
+        // Timeout waiting for socket, fall back to HTTP
+        sendViaHttp();
+      }
+    }, 100);
     return;
   }
 
-  const data = await res.json();
-  await renderChatWithTyping(data.messages || []);
-  renderCitations(data.citations || []);
-  await refreshChats();
-  syncSendButtons();
+  // Fall back to HTTP POST
+  async function sendViaHttp() {
+    const res = await fetch(`/api/chats/${currentChatId}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, citation_mode, top_k }),
+    });
+
+    if (!res.ok) {
+      const typingRow = document.getElementById('typingRow');
+      if (typingRow) typingRow.remove();
+      let detail = 'Failed to query chat.';
+      try {
+        const err = await res.json();
+        if (err.detail) detail = err.detail;
+      } catch (_) { }
+      alert(detail);
+      syncSendButtons();
+      return;
+    }
+
+    const data = await res.json();
+    await renderChatWithTyping(data.messages || []);
+    renderCitations(data.citations || []);
+    await refreshChats();
+    syncSendButtons();
+  }
+
+  sendViaHttp();
 }
 
 async function uploadPdfs() {

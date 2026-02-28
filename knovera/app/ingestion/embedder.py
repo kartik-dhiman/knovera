@@ -14,9 +14,13 @@ class Embedder:
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
-        vectors = self.model.encode(texts, normalize_embeddings=True)
+        from app.core.utils import normalize_text
+        norm = [normalize_text(t) for t in texts]
+        vectors = self.model.encode(norm, normalize_embeddings=True, show_progress_bar=False)
         return vectors.tolist()
 
     def embed_query(self, text: str) -> List[float]:
-        vector = self.model.encode([text], normalize_embeddings=True)
+        from app.core.utils import normalize_text
+        norm = normalize_text(text)
+        vector = self.model.encode([norm], normalize_embeddings=True, show_progress_bar=False)
         return vector[0].tolist()

@@ -476,3 +476,30 @@ class SQLiteStore:
                 (kb_id,),
             ).fetchall()
         return [r["doc_id"] for r in rows]
+    def delete_knowledge_base(self, kb_id: str) -> bool:
+        """Delete a knowledge base and all its document associations.
+        
+        Returns True if deleted, False if not found.
+        """
+        with self._connect() as conn:
+            # Check if KB exists
+            kb = conn.execute(
+                "SELECT id FROM knowledge_bases WHERE id = ?",
+                (kb_id,),
+            ).fetchone()
+            if not kb:
+                return False
+            
+            # Delete knowledge base document associations
+            conn.execute(
+                "DELETE FROM knowledge_base_documents WHERE knowledge_base_id = ?",
+                (kb_id,),
+            )
+            
+            # Delete knowledge base itself
+            conn.execute(
+                "DELETE FROM knowledge_bases WHERE id = ?",
+                (kb_id,),
+            )
+            conn.commit()
+            return True

@@ -69,3 +69,16 @@ def edit_knowledge_base(kb_id: str, payload: KnowledgeBaseEditRequest) -> Knowle
     if not updated:
         raise HTTPException(status_code=500, detail="Knowledge base update failed")
     return KnowledgeBaseSummary(**updated)
+
+@router.delete("/{kb_id}")
+def delete_knowledge_base(kb_id: str) -> dict:
+    """Delete a knowledge base and all its document associations."""
+    kb = container.sqlite.get_knowledge_base(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    
+    deleted = container.sqlite.delete_knowledge_base(kb_id)
+    if not deleted:
+        raise HTTPException(status_code=500, detail="Failed to delete knowledge base")
+    
+    return {"deleted": kb_id, "name": kb.get("name", "")}
