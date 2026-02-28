@@ -15,6 +15,38 @@
   let particles = [];
   let resizeTimer = null;
 
+  // brain-shaped mask path; particles and drawing are constrained inside
+  let brainMask = null;
+
+  function updateMask() {
+    if (!width || !height) return;
+    const cx = width * 0.5;
+
+    // compute radius based on viewport but allow it to grow larger
+    const r = Math.min(width, height) * 0.45;
+    const offset = r * 0.6; // stronger separation for lobes
+
+    // default y-centre is vertical centre
+    let cy = height * 0.5;
+
+    // if hero section is present, move the brain above it
+    const hero = document.getElementById('heroBrandSection');
+    if (hero) {
+      const rect = hero.getBoundingClientRect();
+      // put bottom of brain at ~20px above hero top
+      cy = rect.top - r + 20;
+      // if that pushes mask offscreen, fall back to centre
+      if (cy - r < 0) cy = height * 0.3;
+    }
+
+    const path = new Path2D();
+    // left lobe
+    path.arc(cx - offset, cy, r, 0, Math.PI * 2);
+    // right lobe
+    path.arc(cx + offset, cy, r, 0, Math.PI * 2);
+    brainMask = path;
+  }
+
   const palette = {
     node: { r: 92, g: 141, b: 255 },
     link: { r: 92, g: 141, b: 255 },
@@ -80,9 +112,10 @@
 
   function particleCountForSize() {
     const area = width * height;
-    const base = Math.round(area / 21000);
-    const min = prefersReducedMotion.matches ? 26 : 44;
-    const max = prefersReducedMotion.matches ? 48 : 118;
+    // lower divisor yields more particles to fill the larger brain region
+    const base = Math.round(area / 17000);
+    const min = prefersReducedMotion.matches ? 40 : 80;
+    const max = prefersReducedMotion.matches ? 80 : 200;
     return clamp(base, min, max);
   }
 
@@ -100,9 +133,21 @@
     };
   }
 
+  function createParticleInsideMask() {
+    // repeatedly generate until the point lies within the brain shape
+    let p;
+    do {
+      p = createParticle();
+    } while (brainMask && !ctx.isPointInPath(brainMask, p.x, p.y));
+    return p;
+  }
+
   function initParticles() {
     const count = particleCountForSize();
-    particles = Array.from({ length: count }, createParticle);
+    particles = [];
+    for (let i = 0; i < count; i += 1) {
+      particles.push(createParticleInsideMask());
+    }
   }
 
   function resizeCanvas() {
@@ -116,6 +161,7 @@
     canvas.style.height = `${height}px`;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    updateMask();
     initParticles();
   }
 
@@ -157,6 +203,7 @@
     particle.x += particle.vx * step;
     particle.y += particle.vy * step;
 
+    // bounce off borders of canvas
     if (particle.x <= 0 || particle.x >= width) {
       particle.vx *= -1;
       particle.x = clamp(particle.x, 0, width);
@@ -167,6 +214,19 @@
       particle.vy *= -1;
       particle.y = clamp(particle.y, 0, height);
       randomImpulse(particle, 0.35);
+    }
+
+    // keep particles inside the brain mask
+    if (brainMask && !ctx.isPointInPath(brainMask, particle.x, particle.y)) {
+      // simple reflect
+      particle.vx *= -1;
+      particle.vy *= -1;
+      // nudge back towards center
+      const cx = width * 0.5;
+      const cy = height * 0.5;
+      const ang = Math.atan2(cy - particle.y, cx - particle.x);
+      particle.vx += Math.cos(ang) * 0.2;
+      particle.vy += Math.sin(ang) * 0.2;
     }
   }
 
@@ -235,8 +295,18 @@
       updateParticle(particles[i], step, time);
     }
 
+    // draw only inside the brain silhouette
+    if (brainMask) {
+      ctx.save();
+      ctx.clip(brainMask);
+    }
+
     drawLinks(linkDistance);
     drawNodes(time);
+
+    if (brainMask) {
+      ctx.restore();
+    }
   }
 
   function start() {
