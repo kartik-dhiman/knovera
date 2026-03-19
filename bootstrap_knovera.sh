@@ -77,8 +77,8 @@ if [[ "${BOOTSTRAP_OLLAMA:-0}" == "1" ]]; then
       nohup ollama serve >/tmp/knovera-ollama.log 2>&1 &
       sleep 2
     fi
-    echo "Pulling Ollama model: ${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}"
-    ollama pull "${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}"
+    echo "Pulling Ollama model: ${OLLAMA_MODEL:-qwen2.5:3b-instruct}"
+    ollama pull "${OLLAMA_MODEL:-qwen2.5:3b-instruct}"
   else
     echo "Warning: BOOTSTRAP_OLLAMA=1 but 'ollama' command was not found. Skipping."
   fi
