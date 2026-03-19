@@ -28,6 +28,10 @@ class LLMClient:
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
+            "options": {
+                "num_predict": 512,   # cap output tokens (not input) — prevents rambling
+                "temperature": 0.3,   # lower = faster, more focused sampling
+            },
         }
 
         try:
@@ -66,16 +70,23 @@ class LLMClient:
                 return self.generate(short, _retry=True)
             return ""
 
-    def generate_stream(self, prompt: str, _retry: bool = False):
+    def generate_stream(self, prompt: str, _retry: bool = False, max_tokens: int = 512):
         """Stream tokens from the LLM as they arrive.
         
         Yields individual tokens from Ollama's streaming response.
         Falls back to non-streaming retry with truncation on HTTP 500.
+
+        Args:
+            max_tokens: Maximum output tokens. Use 1024 for broad/summary questions.
         """
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": 0.3,
+            },
         }
 
         try:

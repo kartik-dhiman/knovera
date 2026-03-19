@@ -129,7 +129,7 @@ let kbEditorMode = 'create';
 let editingKbId = null;
 let settingsChatId = null;
 let currentCitationMode = true;
-let currentTopK = 5;
+let currentTopK = 3;
 
 function syncChatHeaderActions() {
   const hasChat = Boolean(currentChatId);
@@ -828,7 +828,7 @@ async function loadChat(chatId) {
   currentUserName = chat.user_name || 'User';
   currentAssistantName = chat.assistant_name || 'Assistant';
   currentCitationMode = Boolean(chat.citation_mode);
-  currentTopK = normalizeTopK(chat.top_k, 5);
+  currentTopK = normalizeTopK(chat.top_k, 3);
   const sourceLabel = chat.knowledge_base_name
     ? `KB: ${chat.knowledge_base_name}`
     : (chat.document_names.join(', ') || 'All indexed docs');
@@ -914,7 +914,7 @@ async function saveChatSettings() {
     currentUserName = updated.user_name || 'User';
     currentAssistantName = updated.assistant_name || 'Assistant';
     currentCitationMode = Boolean(updated.citation_mode);
-    currentTopK = normalizeTopK(updated.top_k, 5);
+    currentTopK = normalizeTopK(updated.top_k, 3);
   }
 
   closeChatSettingsModal();
