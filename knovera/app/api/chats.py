@@ -9,9 +9,10 @@ import asyncio
 
 import logging
 
+from app.core.config import settings
 from app.core.container import container
 from app.generation.llm_client import extractive_fallback
-from app.generation.prompt_builder import build_prompt
+from app.generation.prompt_builder import build_prompt, is_broad_question
 from app.retrieval.context_builder import build_context
 from app.schemas.chat import (
     ChatAskRequest,
@@ -172,7 +173,7 @@ async def chat_websocket(websocket: WebSocket, chat_id: str):
             None, build_prompt, question, context, citation_mode
         )
 
-    async def stream_llm_tokens(prompt: str):
+    async def stream_llm_tokens(prompt: str, max_tokens: int = 512):
         """Run the blocking requests-based LLM stream in a thread pool so the
         asyncio event loop is never blocked between tokens.
         Yields tokens as they arrive from Ollama.
@@ -182,7 +183,7 @@ async def chat_websocket(websocket: WebSocket, chat_id: str):
 
         def _produce() -> None:
             try:
-                for token in container.llm.generate_stream(prompt):
+                for token in container.llm.generate_stream(prompt, max_tokens=max_tokens):
                     loop.call_soon_threadsafe(queue.put_nowait, token)
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
@@ -203,7 +204,7 @@ async def chat_websocket(websocket: WebSocket, chat_id: str):
             msg = await websocket.receive_json()
             question = msg.get("question", "").strip()
             citation_mode = msg.get("citation_mode", True)
-            top_k = msg.get("top_k", 5)
+            top_k = msg.get("top_k", settings.retrieval_top_k)
 
             logger.info("WS chat %s received question '%s' (citation_mode=%s, top_k=%s)", chat_id, question, citation_mode, top_k)
 
@@ -229,10 +230,20 @@ async def chat_websocket(websocket: WebSocket, chat_id: str):
 
             # let client know we're gathering context
             await websocket.send_json({"type":"info","message":"retrieving context"})
-            chunks = await fetch_chunks(question, top_k, doc_ids if doc_ids else None)
+
+            # Boost coverage for broad questions (summary, overview, etc.)
+            effective_top_k = top_k
+            effective_context_budget = None  # uses default from config
+            if is_broad_question(question):
+                effective_top_k = max(top_k * 2, 6)  # at least 6 chunks for summaries
+                effective_context_budget = 6000        # more context for broad answers
+                logger.info("Broad question detected — boosted top_k=%d, context=%d",
+                            effective_top_k, effective_context_budget)
+
+            chunks = await fetch_chunks(question, effective_top_k, doc_ids if doc_ids else None)
             logger.info("Retrieved %d chunks", len(chunks))
 
-            context = build_context(chunks)
+            context = build_context(chunks, max_chars=effective_context_budget)
             prompt = await build_prompt_async(question, context, citation_mode)
             logger.info("Built prompt of length %d", len(prompt))
             
@@ -242,7 +253,8 @@ async def chat_websocket(websocket: WebSocket, chat_id: str):
             # Stream tokens — runs in a thread pool to keep event loop free
             answer = ""
             logger.info("Starting token stream from LLM")
-            async for token in stream_llm_tokens(prompt):
+            stream_max_tokens = 1024 if is_broad_question(question) else 512
+            async for token in stream_llm_tokens(prompt, max_tokens=stream_max_tokens):
                 answer += token
                 await websocket.send_json({"type": "token", "content": token})
             
