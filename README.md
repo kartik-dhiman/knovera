@@ -69,6 +69,13 @@ uvicorn app.main:app --reload
 4. Open UI
 - http://127.0.0.1:8000
 
+## Clearing the Database
+If you need to completely reset the application state, clear the entire database by removing the following directories and files:
+
+```bash
+rm -rf ./data/chroma ./data/app.db ./data/uploads
+```
+
 ## Configuration
 Set env vars in `.env` (optional):
 
