@@ -15,37 +15,8 @@
   let particles = [];
   let resizeTimer = null;
 
-  // brain-shaped mask path; particles and drawing are constrained inside
-  let brainMask = null;
-
-  function updateMask() {
-    if (!width || !height) return;
-    const cx = width * 0.5;
-
-    // compute radius based on viewport but allow it to grow larger
-    const r = Math.min(width, height) * 0.45;
-    const offset = r * 0.6; // stronger separation for lobes
-
-    // default y-centre is vertical centre
-    let cy = height * 0.5;
-
-    // if hero section is present, move the brain above it
-    const hero = document.getElementById('heroBrandSection');
-    if (hero) {
-      const rect = hero.getBoundingClientRect();
-      // put bottom of brain at ~20px above hero top
-      cy = rect.top - r + 20;
-      // if that pushes mask offscreen, fall back to centre
-      if (cy - r < 0) cy = height * 0.3;
-    }
-
-    const path = new Path2D();
-    // left lobe
-    path.arc(cx - offset, cy, r, 0, Math.PI * 2);
-    // right lobe
-    path.arc(cx + offset, cy, r, 0, Math.PI * 2);
-    brainMask = path;
-  }
+  let mouseX = -1000;
+  let mouseY = -1000;
 
   const palette = {
     node: { r: 92, g: 141, b: 255 },
@@ -112,10 +83,9 @@
 
   function particleCountForSize() {
     const area = width * height;
-    // lower divisor yields more particles to fill the larger brain region
-    const base = Math.round(area / 17000);
-    const min = prefersReducedMotion.matches ? 40 : 80;
-    const max = prefersReducedMotion.matches ? 80 : 200;
+    const base = Math.round(area / 8000);
+    const min = prefersReducedMotion.matches ? 30 : 75;
+    const max = prefersReducedMotion.matches ? 50 : 400;
     return clamp(base, min, max);
   }
 
@@ -133,20 +103,11 @@
     };
   }
 
-  function createParticleInsideMask() {
-    // repeatedly generate until the point lies within the brain shape
-    let p;
-    do {
-      p = createParticle();
-    } while (brainMask && !ctx.isPointInPath(brainMask, p.x, p.y));
-    return p;
-  }
-
   function initParticles() {
     const count = particleCountForSize();
     particles = [];
     for (let i = 0; i < count; i += 1) {
-      particles.push(createParticleInsideMask());
+      particles.push(createParticle());
     }
   }
 
@@ -161,7 +122,6 @@
     canvas.style.height = `${height}px`;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    updateMask();
     initParticles();
   }
 
@@ -185,6 +145,20 @@
     const driftAngle = Math.sin((time * 0.00023) + particle.wobble) * Math.PI;
     particle.vx += Math.cos(driftAngle) * 0.0042 * step;
     particle.vy += Math.sin(driftAngle) * 0.0042 * step;
+
+    // Mouse repulsion
+    const dx = particle.x - mouseX;
+    const dy = particle.y - mouseY;
+    const distSq = dx * dx + dy * dy;
+    const interactionRadius = 250;
+    const interactionRadiusSq = interactionRadius * interactionRadius;
+
+    if (distSq < interactionRadiusSq && distSq > 0) {
+      const dist = Math.sqrt(distSq);
+      const force = (interactionRadius - dist) / interactionRadius;
+      particle.vx += (dx / dist) * force * 0.6 * step;
+      particle.vy += (dy / dist) * force * 0.6 * step;
+    }
 
     const speed = Math.hypot(particle.vx, particle.vy);
     const minSpeed = 0.05;
@@ -214,43 +188,6 @@
       particle.vy *= -1;
       particle.y = clamp(particle.y, 0, height);
       randomImpulse(particle, 0.35);
-    }
-
-    // keep particles inside the brain mask
-    if (brainMask && !ctx.isPointInPath(brainMask, particle.x, particle.y)) {
-      // simple reflect
-      particle.vx *= -1;
-      particle.vy *= -1;
-      // nudge back towards center
-      const cx = width * 0.5;
-      const cy = height * 0.5;
-      const ang = Math.atan2(cy - particle.y, cx - particle.x);
-      particle.vx += Math.cos(ang) * 0.2;
-      particle.vy += Math.sin(ang) * 0.2;
-    }
-  }
-
-  function drawLinks(maxDistance) {
-    const maxDistSq = maxDistance * maxDistance;
-    for (let i = 0; i < particles.length; i += 1) {
-      const a = particles[i];
-      for (let j = i + 1; j < particles.length; j += 1) {
-        const b = particles[j];
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const distSq = (dx * dx) + (dy * dy);
-        if (distSq > maxDistSq) continue;
-
-        const strength = 1 - (distSq / maxDistSq);
-        const alpha = clamp(0.02 + (strength * 0.24), 0, 0.28);
-
-        ctx.strokeStyle = rgba(palette.link, alpha);
-        ctx.lineWidth = 0.65 + (strength * 0.55);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-      }
     }
   }
 
@@ -289,24 +226,11 @@
       return;
     }
 
-    const linkDistance = clamp(Math.sqrt((width * height) / 30), 84, 160);
-
     for (let i = 0; i < particles.length; i += 1) {
       updateParticle(particles[i], step, time);
     }
 
-    // draw only inside the brain silhouette
-    if (brainMask) {
-      ctx.save();
-      ctx.clip(brainMask);
-    }
-
-    drawLinks(linkDistance);
     drawNodes(time);
-
-    if (brainMask) {
-      ctx.restore();
-    }
   }
 
   function start() {
@@ -344,6 +268,17 @@
 
   window.addEventListener('resize', handleResize);
   document.addEventListener('visibilitychange', onVisibilityChange);
+
+  window.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+  });
+
+  document.addEventListener('mouseleave', () => {
+    mouseX = -1000;
+    mouseY = -1000;
+  });
 
   const themeObserver = new MutationObserver(() => {
     updatePalette();

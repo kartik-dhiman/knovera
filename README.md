@@ -2,6 +2,10 @@
 
 Turn any document into a conversational knowledge base — with full multilingual support.
 
+<p align="center">
+  <img src="docs/screen.png" alt="Knovera UI" width="800">
+</p>
+
 ## Features
 
 - **Upload one or many PDFs** — digital-text or mixed-language documents
